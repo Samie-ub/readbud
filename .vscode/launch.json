@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:readbud}",
+            "name": "Debug ReadBudMac",
+            "target": "ReadBudMac",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug ReadBudMac"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:readbud}",
+            "name": "Release ReadBudMac",
+            "target": "ReadBudMac",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release ReadBudMac"
+        }
+    ]
+}
