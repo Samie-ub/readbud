@@ -27,13 +27,15 @@ struct ReaderDocument: Codable, Equatable, Sendable {
 }
 
 enum SpeechEngineKind: String, CaseIterable, Identifiable, Codable, Sendable {
+    // Retained only so previously saved ReadBud state can be decoded after the
+    // Kokoro engine is removed. All new playback uses the Apple voice engine.
     case kokoro
     case system
 
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .kokoro: "Kokoro · Core ML"
+        case .kokoro: "Apple system voice"
         case .system: "Apple system voice"
         }
     }
@@ -69,19 +71,4 @@ struct DebugLogEntry: Identifiable, Hashable {
     let date: Date
     let level: DebugLogLevel
     let message: String
-}
-
-struct KokoroVoice: Identifiable, Hashable {
-    let id: String
-    let label: String
-
-    static let choices = [
-        KokoroVoice(id: "af_heart", label: "Heart · American"),
-        KokoroVoice(id: "af_bella", label: "Bella · American"),
-        KokoroVoice(id: "af_nicole", label: "Nicole · American"),
-        KokoroVoice(id: "am_fenrir", label: "Fenrir · American"),
-        KokoroVoice(id: "am_michael", label: "Michael · American"),
-        KokoroVoice(id: "bf_emma", label: "Emma · British"),
-        KokoroVoice(id: "bm_george", label: "George · British")
-    ]
 }

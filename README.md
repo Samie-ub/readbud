@@ -1,26 +1,38 @@
 # ReadBud for macOS
 
-ReadBud is a native SwiftUI document reader for macOS. It imports PDF, TXT, and Markdown files, reads them with an on-device Kokoro Core ML voice, highlights the active sentence, and saves reading progress.
+ReadBud is a native SwiftUI reader that turns documents and web articles into a focused listening experience. Drop in a PDF, text file, Markdown file, or public article URL; ReadBud extracts the readable text, speaks it with a macOS system voice, highlights the active sentence, and remembers your progress.
 
-ReadBud runs as a menu-bar utility. Drag a supported document or a public article URL to the black shelf at the top center of the screen to start listening, or use the menu-bar menu to open a document.
+![ReadBud importing and reading a web article](assets/readbud-demo.gif)
+
+## Features
+
+- A compact menu-bar app with a top-center drop shelf that follows you across macOS Spaces
+- PDF, TXT, Markdown, and public web article imports
+- Built-in macOS voices with selectable voice and playback speeds from 0.75× to 2×
+- Sentence highlighting, click-to-seek, skip controls, and saved reading progress
+- Direct web extraction with a private WebKit and Mozilla Readability fallback for JavaScript-rendered pages
+- Local-first text cleanup, with optional Ollama and Gemini cleanup routes
+- Cancelable imports, configurable AI time limits, and a **Read now** option that skips AI
+- An optional developer panel for inspecting import routing, timing, and cleaned text
 
 ## Requirements
 
 - macOS 15 or newer
 - Xcode with Swift 6.2 support
-- Internet access for the initial package and Kokoro model downloads
+
+ReadBud uses voices installed in macOS and does not download a speech model. Ollama and Gemini are optional and only needed when you explicitly choose their cleanup routes.
 
 ## Run
+
+Clone the repository, then launch an optimized local app bundle:
 
 ```bash
 ./scripts/run.sh
 ```
 
-The script builds and launches an optimized local `.app` bundle without a background watcher. Use this for everyday reading. The first release build may take longer while dependencies compile.
+The first release build may take a little longer. ReadBud appears in the menu bar rather than opening a permanent app window.
 
-The first Kokoro playback downloads the Core ML model once. Later launches reuse the model stored in your user Application Support directory.
-
-For Xcode development, open `Package.swift`, select the `ReadBudMac` scheme, and press Run.
+You can also open `Package.swift` in Xcode, select the `ReadBudMac` scheme, and press Run.
 
 For automatic rebuild and relaunch while editing, use:
 
@@ -28,56 +40,69 @@ For automatic rebuild and relaunch while editing, use:
 ./scripts/dev.sh
 ```
 
-The watcher rebuilds whenever a Swift source or package file changes, then replaces the app instance it launched. Stop it with `Control-C`.
+Stop the watcher with `Control-C`.
 
-## Using the Drop Shelf
+## Usage
 
 1. Leave ReadBud running in the menu bar.
 2. Drag a PDF, TXT, MD, Markdown file, or public article URL toward the top center of the screen.
-3. Drop it on the expanded black shelf.
-4. ReadBud imports the file or fetches the article and begins playback automatically.
+3. Drop it on the expanded shelf.
+4. Use the shelf or menu-bar controls to play, pause, skip, change speed, or select a voice.
 
-URL imports try direct article extraction first. Pages requiring JavaScript fall back to a private WebKit view with Mozilla Readability. The renderer does not share Safari login sessions. Scanned PDFs require a text layer; OCR is not included.
+URL imports try direct article extraction first. Pages that require JavaScript fall back to a private WebKit view with Mozilla Readability. The renderer does not share Safari login sessions. Scanned PDFs must already contain a text layer; OCR is not included.
 
-### Cleanup and AI routing
+## Cleanup modes
 
-**Automatic** is the default, including migration from the old cleanup toggles. Markdown and text use fast formatting cleanup without loading an LLM. Clean PDF/article text also stays local; short extractions with obvious debris may use Ollama.
+**Automatic · local first** is the default. Markdown and text files use fast formatting cleanup without loading an AI model. Clean PDF and article text also stays on the deterministic path, while short extractions with obvious debris may use Ollama when it is available.
 
-Settings and the shelf gear menu offer four routes:
+The shelf gear menu and Settings provide four routes:
 
-- **Automatic · local first**: use deterministic cleanup where sufficient.
-- **Fast · no AI**: never invoke a cleanup model.
-- **Local AI · Ollama**: explicitly request AI cleanup for the imported file or article.
-- **Cloud AI · Gemini (articles)**: explicitly send extracted article text to Gemini; files stay local.
+- **Automatic · local first** — use deterministic cleanup whenever it is sufficient.
+- **Fast · no AI** — never invoke a cleanup model.
+- **Local AI · Ollama** — explicitly request local AI cleanup for an imported file or article.
+- **Cloud AI · Gemini (articles)** — explicitly send extracted article text to Gemini; local files are not sent to Gemini.
 
-For Ollama, start the local service, open Settings, and refresh models. Select an installed local text model such as `llama3.2:latest`. Embedding and cloud models are excluded. There is no automatic cloud fallback.
+For Ollama, start the local service and refresh the model list in Settings. Select an installed text model such as `llama3.2:latest`; embedding and cloud models are excluded. ReadBud never falls back to a cloud provider automatically.
 
-AI has one total time budget (15 seconds by default, configurable to 30 or 60), covering discovery and all sections. **Read now** skips AI and starts listening to the complete basic-cleaned document. **Cancel import** keeps the previous document. Dropping a new source cancels the prior import.
+AI cleanup has one total time budget—15 seconds by default, configurable to 30 or 60 seconds. A failed, timed-out, empty, or truncated response leaves the complete basic-cleaned document intact; partial rewrites are discarded. **Read now** skips AI, and **Cancel import** keeps the previous document.
 
-A failed, timed-out, empty, or truncated AI response leaves the entire basic-cleaned document intact; partial AI rewrites are discarded. The shelf shows a notice and the optional developer panel records routing and timing. Source files are never changed. Re-import a document to apply new cleanup settings.
+## Privacy
 
-The developer panel is hidden by default; enable it from the shelf gear menu to inspect text and diagnostics.
+- Source files are read locally and are never modified.
+- Document playback uses the selected macOS system voice.
+- Ollama cleanup stays on the local Ollama service.
+- Gemini receives extracted article text only when **Cloud AI** is explicitly selected.
+- The private article renderer does not use your Safari cookies or signed-in sessions.
 
-## Build
+## Build and test
 
 ```bash
 swift build
 swift test
 ```
 
-An opt-in local provider smoke test is available with `READBUD_LIVE_OLLAMA=1 swift test --filter LiveCleanupTests`. It uses the installed `llama3.2:latest` model.
+An opt-in provider smoke test is available when Ollama and `llama3.2:latest` are installed:
 
-## Structure
-
-```text
-Sources/ReadBudMac/   SwiftUI application and local speech engines
-Package.swift         Swift package definition
-Package.resolved      Pinned package versions
-doc.md                Development and troubleshooting guide
+```bash
+READBUD_LIVE_OLLAMA=1 swift test --filter LiveCleanupTests
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for component boundaries, resource limits, and validation.
+## Project structure
 
-All app runtime code is Swift. Kokoro inference runs in-process through Core ML; no Python environment is required. Optional AI import cleanup connects to the local Ollama service.
+```text
+Sources/ReadBudMac/    SwiftUI application, import pipeline, and speech playback
+Tests/ReadBudMacTests/ Unit and integration tests
+assets/                README media
+scripts/               Build, launch, and development helpers
+Package.swift          Swift package definition
+ARCHITECTURE.md        Component boundaries and resource limits
+doc.md                 Development and troubleshooting guide
+```
+
+All runtime code is Swift. See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details.
 
 Mozilla Readability 0.6.0 is bundled under the Apache License 2.0; its license is included with the app resources.
+
+## License
+
+ReadBud is open source under the [MIT License](LICENSE).

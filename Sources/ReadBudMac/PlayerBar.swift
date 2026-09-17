@@ -45,17 +45,6 @@ struct PlayerBar: View {
 
                 Spacer(minLength: 12)
 
-                Picker("Engine", selection: Binding(
-                    get: { reader.engineKind },
-                    set: { reader.changeEngine(to: $0) }
-                )) {
-                    ForEach(SpeechEngineKind.allCases) { engine in
-                        Text(engine.label).tag(engine)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 170)
-
                 Picker("Speed", selection: $reader.speed) {
                     ForEach([0.75, 1, 1.25, 1.5, 1.75, 2], id: \.self) { speed in
                         Text("\(speed.formatted())×").tag(speed)
@@ -79,30 +68,16 @@ struct PlayerBar: View {
 
     @ViewBuilder
     private var voicePicker: some View {
-        if reader.engineKind == .kokoro {
-            Picker("Voice", selection: $reader.selectedVoiceID) {
-                ForEach(reader.kokoroVoices) { voice in
-                    Text(voice.label).tag(voice.id)
-                }
+        Picker("Voice", selection: $reader.selectedVoiceID) {
+            ForEach(reader.systemVoices, id: \.identifier) { voice in
+                Text(voice.name).tag(voice.identifier)
             }
-            .labelsHidden()
-            .frame(width: 155)
-            .onChange(of: reader.selectedVoiceID) { _, _ in
-                reader.stop()
-                reader.save()
-            }
-        } else {
-            Picker("Voice", selection: $reader.selectedVoiceID) {
-                ForEach(reader.systemVoices, id: \.identifier) { voice in
-                    Text(voice.name).tag(voice.identifier)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 155)
-            .onChange(of: reader.selectedVoiceID) { _, _ in
-                reader.stop()
-                reader.save()
-            }
+        }
+        .labelsHidden()
+        .frame(width: 155)
+        .onChange(of: reader.selectedVoiceID) { _, _ in
+            reader.stop()
+            reader.save()
         }
     }
 }

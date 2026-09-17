@@ -8,15 +8,11 @@ let package = Package(
     products: [
         .executable(name: "ReadBudMac", targets: ["ReadBudMac"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/Jud/kokoro-coreml.git", from: "0.11.0")
-    ],
+    dependencies: [],
     targets: [
         .executableTarget(
             name: "ReadBudMac",
-            dependencies: [
-                .product(name: "KokoroCoreML", package: "kokoro-coreml")
-            ],
+            dependencies: [],
             path: "Sources/ReadBudMac",
             resources: [
                 .copy("Resources")

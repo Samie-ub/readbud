@@ -133,6 +133,16 @@ private struct DeveloperToolPanelView: View {
             Spacer()
 
             Button {
+                reader.isDeveloperToolVisible = false
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("Minimize ReadBud internals")
+
+            Button {
                 reader.clearDebugLog()
             } label: {
                 Image(systemName: "trash")

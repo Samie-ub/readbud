@@ -12,7 +12,7 @@ final class ReaderModel: ObservableObject {
     @Published private(set) var isImporting = false
     @Published var speed: Double
     @Published var selectedVoiceID: String
-    @Published var engineKind: SpeechEngineKind = .kokoro
+    @Published var engineKind: SpeechEngineKind = .system
     @Published var importError: String?
     @Published private(set) var debugLog: [DebugLogEntry] = []
     @Published private(set) var activeWordIndex = 0
@@ -37,10 +37,8 @@ final class ReaderModel: ObservableObject {
     @Published private(set) var isLoadingOllamaModels = false
     @Published private(set) var importStatus = "Opening document…"
 
-    let kokoroVoices = KokoroVoice.choices
     let systemVoices: [AVSpeechSynthesisVoice]
 
-    private let kokoroEngine: any SpeechEngine
     private let systemEngine: any SpeechEngine
     private var playbackTask: Task<Void, Never>?
     private var wordTrackingTask: Task<Void, Never>?
@@ -60,7 +58,6 @@ final class ReaderModel: ObservableObject {
          pipeline: ImportPipeline = ImportPipeline(), saved: SavedReaderState? = ReaderStore.load(),
          initialGeminiAPIKey: String? = nil,
          persistState: @escaping @Sendable (SavedReaderState, UUID) async -> Void = ReaderStore.persist) {
-        self.kokoroEngine = kokoroEngine ?? KokoroSpeechEngine()
         self.systemEngine = systemEngine ?? SystemSpeechEngine()
         self.importPipeline = pipeline
         self.persistState = persistState
@@ -68,8 +65,7 @@ final class ReaderModel: ObservableObject {
         document = initialDocument
         activeIndex = min(saved?.sentenceIndex ?? 0, max(0, initialDocument.sentences.count - 1))
         speed = saved?.speed ?? 1
-        selectedVoiceID = saved?.voiceID ?? "af_heart"
-        engineKind = saved?.engineKind ?? .kokoro
+        engineKind = .system
         // Old boolean defaults enabled expensive cleanup for every file. Migrate to local-first routing.
         cleanupMode = CleanupMode(rawValue: defaults.string(forKey: "cleanupMode") ?? "") ?? .automatic
         let savedLimit = defaults.integer(forKey: "cleanupTimeLimit")
@@ -78,6 +74,10 @@ final class ReaderModel: ObservableObject {
         documentWordCount = initialDocument.text.split(whereSeparator: \Character.isWhitespace).count
         geminiAPIKey = initialGeminiAPIKey ?? ProcessInfo.processInfo.environment["GEMINI_API_KEY"] ?? ""
         systemVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+        let savedVoiceID = saved?.voiceID
+        selectedVoiceID = systemVoices.first(where: { $0.identifier == savedVoiceID })?.identifier
+            ?? systemVoices.first?.identifier
+            ?? ""
         didLoadCloudCredential = initialGeminiAPIKey != nil || !geminiAPIKey.isEmpty
         lastSavedCloudCredential = geminiAPIKey
     }
@@ -114,7 +114,7 @@ final class ReaderModel: ObservableObject {
         let id = UUID()
         playbackID = id
         isPlaying = true
-        activity = engineKind == .kokoro ? .preparing : .reading
+        activity = .reading
         playbackTask = Task { [weak self] in
             await self?.playLoop(id: id)
         }
@@ -163,9 +163,7 @@ final class ReaderModel: ObservableObject {
     func changeEngine(to kind: SpeechEngineKind) {
         stop()
         engineKind = kind
-        selectedVoiceID = kind == .kokoro
-            ? "af_heart"
-            : systemVoices.first?.identifier ?? ""
+        selectedVoiceID = systemVoices.first?.identifier ?? selectedVoiceID
         save()
     }
 
@@ -320,7 +318,7 @@ final class ReaderModel: ObservableObject {
     }
 
     private var currentEngine: SpeechEngine {
-        engineKind == .kokoro ? kokoroEngine : systemEngine
+        systemEngine
     }
 
     func clearDebugLog() {
@@ -373,7 +371,7 @@ final class ReaderModel: ObservableObject {
     private func playLoop(id: UUID) async {
         while playbackID == id && isPlaying && document.sentences.indices.contains(activeIndex) && !Task.isCancelled {
             let sentence = document.sentences[activeIndex]
-            activity = engineKind == .kokoro ? .preparing : .reading
+            activity = .reading
             do {
                 try await currentEngine.prepare([sentence.text], voice: selectedVoiceID, speed: speed)
                 try Task.checkCancellation()
@@ -412,13 +410,6 @@ final class ReaderModel: ObservableObject {
             } catch {
                 guard playbackID == id, !Task.isCancelled else { return }
                 wordTrackingTask?.cancel()
-                if engineKind == .kokoro {
-                    kokoroEngine.stop()
-                    engineKind = .system
-                    selectedVoiceID = systemVoices.first?.identifier ?? ""
-                    activity = .reading
-                    continue
-                }
                 isPlaying = false
                 activity = .failed(error.localizedDescription)
                 return

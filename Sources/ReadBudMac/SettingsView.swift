@@ -5,15 +5,6 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Picker("Speech engine", selection: Binding(
-                get: { reader.engineKind },
-                set: { reader.changeEngine(to: $0) }
-            )) {
-                ForEach(SpeechEngineKind.allCases) { engine in
-                    Text(engine.label).tag(engine)
-                }
-            }
-
             Slider(value: $reader.speed, in: 0.75...2, step: 0.25) {
                 Text("Reading speed")
             } minimumValueLabel: {
@@ -61,7 +52,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text("Kokoro runs locally with Core ML. Its model downloads once on first use; if it is unavailable, ReadBud switches to Apple system speech.")
+            Text("ReadBud uses Apple’s system speech voice for reading. Choose an enhanced or premium voice in macOS Voice settings for the best quality.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

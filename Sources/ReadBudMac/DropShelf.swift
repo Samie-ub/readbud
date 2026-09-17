@@ -12,7 +12,7 @@ private final class DropShelfState: ObservableObject {
 @MainActor
 final class DropShelfController {
     private let collapsedSize = NSSize(width: 170, height: 22)
-    private let expandedSize = NSSize(width: 452, height: 212)
+    private let expandedSize = NSSize(width: 452, height: 154)
     private let reader: ReaderModel
     private let state = DropShelfState()
     private let panel: NSPanel
@@ -20,6 +20,8 @@ final class DropShelfController {
     private var localEventMonitor: Any?
     private var globalEventMonitor: Any?
     private var collapseTask: Task<Void, Never>?
+    private var trackingMenus: Set<ObjectIdentifier> = []
+    private var errorVisibleUntil: Date?
     private var cancellables: Set<AnyCancellable> = []
 
     init(reader: ReaderModel) {
@@ -63,6 +65,7 @@ final class DropShelfController {
 
         configurePanel()
         observeReader()
+        observeMenus()
     }
 
     func start() {
@@ -93,6 +96,40 @@ final class DropShelfController {
                 } else {
                     self.scheduleCollapse()
                 }
+            }
+            .store(in: &cancellables)
+
+        reader.$importError
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] error in
+                guard let self else { return }
+                self.errorVisibleUntil = error == nil ? nil : Date().addingTimeInterval(8)
+                if error != nil {
+                    self.setExpanded(true)
+                }
+                self.scheduleCollapse()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func observeMenus() {
+        NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)
+            .sink { [weak self] notification in
+                guard let self, self.state.isExpanded,
+                      let menu = notification.object as? NSMenu else { return }
+                self.trackingMenus.insert(ObjectIdentifier(menu))
+                self.collapseTask?.cancel()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)
+            .sink { [weak self] notification in
+                guard let self, let menu = notification.object as? NSMenu,
+                      self.trackingMenus.remove(ObjectIdentifier(menu)) != nil else { return }
+                // Menu tracking can swallow the shelf's mouse-exit event.
+                self.state.isHovered = self.panel.frame.contains(NSEvent.mouseLocation)
+                self.scheduleCollapse()
             }
             .store(in: &cancellables)
     }
@@ -148,7 +185,15 @@ final class DropShelfController {
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, let self else { return }
+            if let deadline = self.errorVisibleUntil {
+                let remaining = deadline.timeIntervalSinceNow
+                if remaining > 0 {
+                    try? await Task.sleep(for: .seconds(remaining))
+                }
+            }
+            guard !Task.isCancelled else { return }
             guard !self.reader.isImporting,
+                  self.trackingMenus.isEmpty,
                   !self.state.isDropTargeted,
                   !self.state.isHovered
             else { return }
@@ -294,6 +339,14 @@ private struct DropShelfView: View {
         ZStack(alignment: .top) {
             shelfShape(cornerRadius: state.isExpanded ? 18 : 8)
                 .fill(.black)
+                .overlay {
+                    ShelfIntelligenceGlow(
+                        cornerRadius: state.isExpanded ? 18 : 8,
+                        isExpanded: state.isExpanded,
+                        isActive: reader.isPlaying || reader.isImporting,
+                        isDropTargeted: state.isDropTargeted
+                    )
+                }
 
             if state.isExpanded {
                 expandedShelf
@@ -317,8 +370,9 @@ private struct DropShelfView: View {
 
     private var collapsedShelf: some View {
         VoiceWaveView(
-            isAnimating: reader.isPlaying,
-            compact: true
+            isAnimating: reader.isPlaying || reader.isImporting,
+            compact: true,
+            activityLabel: reader.isImporting ? "Importing document" : "Reading aloud"
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("ReadBud shelf")
@@ -336,7 +390,10 @@ private struct DropShelfView: View {
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.tint)
                     } else {
-                        VoiceWaveView(isAnimating: reader.isPlaying)
+                        VoiceWaveView(
+                            isAnimating: reader.isPlaying || reader.isImporting,
+                            activityLabel: reader.isImporting ? "Importing document" : "Reading aloud"
+                        )
                     }
                 }
                 .frame(width: 36, height: 36)
@@ -354,7 +411,6 @@ private struct DropShelfView: View {
                         .help(statusText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                shelfSettingsMenu
             }
             .frame(height: 36)
 
@@ -369,80 +425,17 @@ private struct DropShelfView: View {
             .accessibilityLabel("Reading progress")
             .accessibilityValue("\(Int(reader.progress * 100)) percent")
 
-            HStack(spacing: 20) {
-                Spacer(minLength: 0)
-                transportButton("backward.end.fill", help: "Previous sentence") {
-                    reader.skip(by: -1)
-                }
-                .disabled(reader.isImporting)
-                if reader.isImporting {
-                    Button(reader.canReadNow ? "Read now" : "Cancel") {
-                        reader.canReadNow ? reader.readNow() : reader.cancelImport()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help(reader.canReadNow ? "Skip AI cleanup and start reading" : "Cancel this import")
-                } else {
-                    transportButton(
-                        reader.isPlaying ? "pause.fill" : "play.fill",
-                        help: reader.isPlaying ? "Pause" : "Play",
-                        isPrimary: true
-                    ) {
-                        reader.togglePlayback()
-                    }
-                }
-                transportButton("forward.end.fill", help: "Next sentence") {
-                    reader.skip(by: 1)
-                }
-                .disabled(reader.isImporting)
-                Spacer(minLength: 0)
+            HStack(spacing: 0) {
+                playbackControls
+
+                Spacer(minLength: 16)
+
+                playbackSettings
+
+                shelfSettingsMenu
+                    .padding(.leading, 6)
             }
-            .frame(height: 44)
-
-            HStack(spacing: 8) {
-                Menu {
-                    Picker("Speech engine", selection: Binding(
-                        get: { reader.engineKind },
-                        set: { reader.changeEngine(to: $0) }
-                    )) {
-                        ForEach(SpeechEngineKind.allCases) { engine in
-                            Text(engine.label).tag(engine)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    optionLabel(reader.engineKind == .kokoro ? "Kokoro" : "System", icon: "waveform")
-                }
-                .frame(width: 112)
-                .help("Speech engine")
-                .accessibilityLabel("Speech engine: \(reader.engineKind.label)")
-
-                Menu {
-                    Picker("Reading speed", selection: $reader.speed) {
-                        ForEach([0.75, 1, 1.25, 1.5, 1.75, 2], id: \.self) { speed in
-                            Text("\(speed.formatted())×").tag(speed)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    optionLabel("\(reader.speed.formatted())×")
-                        .monospacedDigit()
-                }
-                .frame(width: 68)
-                .help("Reading speed")
-                .accessibilityLabel("Reading speed: \(reader.speed.formatted()) times")
-                .onChange(of: reader.speed) { _, _ in
-                    reader.stop()
-                    reader.save()
-                }
-
-                voicePicker
-                    .frame(maxWidth: .infinity)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize(horizontal: false, vertical: true)
-            .disabled(reader.isImporting)
+            .frame(height: 36)
         }
         .padding(.horizontal, 32)
         .padding(.top, 24)
@@ -453,37 +446,97 @@ private struct DropShelfView: View {
                     .fill(Color.accentColor.opacity(0.08))
             }
         }
-        .overlay {
-            if state.isDropTargeted {
-                shelfShape(cornerRadius: 18)
-                    .stroke(Color.accentColor, lineWidth: 1.5)
+    }
+
+    private var playbackControls: some View {
+        Group {
+            if reader.isImporting {
+                Button(reader.canReadNow ? "Read now" : "Cancel") {
+                    reader.canReadNow ? reader.readNow() : reader.cancelImport()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(reader.canReadNow ? "Skip AI cleanup and start reading" : "Cancel this import")
+            } else {
+                transportControls
             }
         }
+        .frame(width: 108, height: 36, alignment: .leading)
+    }
+
+    private var transportControls: some View {
+        HStack(spacing: 8) {
+            transportButton("backward.end.fill", help: "Previous sentence") {
+                reader.skip(by: -1)
+            }
+            transportButton(
+                reader.isPlaying ? "pause.fill" : "play.fill",
+                help: reader.isPlaying ? "Pause" : "Play",
+                isPrimary: true
+            ) {
+                reader.togglePlayback()
+            }
+            transportButton("forward.end.fill", help: "Next sentence") {
+                reader.skip(by: 1)
+            }
+        }
+        .fixedSize()
+    }
+
+    private var playbackSettings: some View {
+        HStack(spacing: 6) {
+            Menu {
+                Picker("Reading speed", selection: $reader.speed) {
+                    ForEach([0.75, 1, 1.25, 1.5, 1.75, 2], id: \.self) { speed in
+                        Text("\(speed.formatted())×").tag(speed)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                optionLabel("\(reader.speed.formatted())×")
+                    .monospacedDigit()
+            }
+            .frame(width: 58)
+            .help("Reading speed")
+            .accessibilityLabel("Reading speed: \(reader.speed.formatted()) times")
+            .onChange(of: reader.speed) { _, _ in
+                reader.stop()
+                reader.save()
+            }
+
+            voicePicker
+                .frame(width: 116)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .disabled(reader.isImporting)
     }
 
     private func optionLabel(_ title: String, icon: String? = nil) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .lineLimit(1)
             Spacer(minLength: 0)
             Image(systemName: "chevron.down")
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 10)
-        .frame(height: 34)
-        .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(.white.opacity(0.07), lineWidth: 0.5)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var shelfSettingsMenu: some View {
@@ -503,7 +556,7 @@ private struct DropShelfView: View {
             }
         } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 28, height: 28)
                 .background(.white.opacity(0.065), in: Circle())
@@ -546,9 +599,9 @@ private struct DropShelfView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: isPrimary ? 17 : 13, weight: .semibold))
+                .font(.system(size: isPrimary ? 14 : 11, weight: .semibold))
                 .offset(x: systemName == "play.fill" ? 1 : 0)
-                .frame(width: isPrimary ? 44 : 34, height: isPrimary ? 44 : 34)
+                .frame(width: isPrimary ? 36 : 28, height: isPrimary ? 36 : 28)
                 .contentShape(Circle())
         }
         .buttonStyle(ShelfTransportStyle(isPrimary: isPrimary))
@@ -557,24 +610,14 @@ private struct DropShelfView: View {
     }
 
     private var selectedVoiceName: String {
-        if reader.engineKind == .kokoro {
-            return reader.kokoroVoices.first { $0.id == reader.selectedVoiceID }?
-                .label.components(separatedBy: " · ").first ?? "Choose voice"
-        }
         return reader.systemVoices.first { $0.identifier == reader.selectedVoiceID }?.name ?? "Choose voice"
     }
 
     private var voicePicker: some View {
         Menu {
             Picker("Voice", selection: $reader.selectedVoiceID) {
-                if reader.engineKind == .kokoro {
-                    ForEach(reader.kokoroVoices) { voice in
-                        Text(voice.label).tag(voice.id)
-                    }
-                } else {
-                    ForEach(reader.systemVoices, id: \.identifier) { voice in
-                        Text(voice.name).tag(voice.identifier)
-                    }
+                ForEach(reader.systemVoices, id: \.identifier) { voice in
+                    Text(voice.name).tag(voice.identifier)
                 }
             }
             .pickerStyle(.inline)
@@ -643,34 +686,89 @@ private struct NotchShape: Shape {
     }
 }
 
+private enum ShelfIntelligenceStyle {
+    static let colors: [Color] = [
+        Color(red: 0.28, green: 0.78, blue: 1),
+        Color(red: 0.40, green: 0.43, blue: 1),
+        Color(red: 0.73, green: 0.40, blue: 1),
+        Color(red: 1, green: 0.38, blue: 0.67),
+        Color(red: 1, green: 0.66, blue: 0.43),
+        Color(red: 0.28, green: 0.78, blue: 1)
+    ]
+
+    static let gradient = LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
+}
+
+/// An inward glow keeps the original panel bounds and black notch silhouette intact.
+private struct ShelfIntelligenceGlow: View {
+    let cornerRadius: CGFloat
+    let isExpanded: Bool
+    let isActive: Bool
+    let isDropTargeted: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !isActive || reduceMotion)) { timeline in
+            let time = isActive && !reduceMotion ? timeline.date.timeIntervalSinceReferenceDate : 0
+            let breath = isActive ? 0.90 + 0.10 * sin(time * 1.8) : 1.0
+            let intensity = isDropTargeted ? 0.95 : (isActive ? 0.80 : 0.38)
+            let gradient = AngularGradient(
+                colors: ShelfIntelligenceStyle.colors,
+                center: .center,
+                angle: .degrees(time.truncatingRemainder(dividingBy: 12) * 30)
+            )
+            let shape = NotchShape(radius: cornerRadius)
+
+            ZStack {
+                shape.stroke(gradient, lineWidth: isExpanded ? 12 : 5)
+                    .blur(radius: isExpanded ? 9 : 4)
+                    .opacity(intensity * breath * 0.55)
+                shape.stroke(gradient, lineWidth: isExpanded ? 3 : 2)
+                    .blur(radius: 1.4)
+                    .opacity(intensity * breath)
+                shape.stroke(gradient, lineWidth: 0.9)
+                    .opacity(intensity * 0.85)
+            }
+            .clipShape(shape)
+            .mask {
+                LinearGradient(
+                    stops: [.init(color: .clear, location: 0), .init(color: .white, location: 0.25)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct VoiceWaveView: View {
     let isAnimating: Bool
     var compact = false
+    var activityLabel = "Reading aloud"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !isAnimating)) { timeline in
-            let phase = timeline.date.timeIntervalSinceReferenceDate * 7
+        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !isAnimating || reduceMotion)) { timeline in
+            let phase = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate * 7
 
-            HStack(alignment: .center, spacing: compact ? 2 : 2.5) {
-                ForEach(0..<5, id: \.self) { index in
-                    Capsule()
-                        .fill(barColor)
-                        .frame(
-                            width: compact ? 1.5 : 2.5,
-                            height: barHeight(index: index, phase: phase)
-                        )
+            ShelfIntelligenceStyle.gradient
+                .frame(width: compact ? 15.5 : 22.5, height: compact ? 10 : 20)
+                .mask {
+                    HStack(alignment: .center, spacing: compact ? 2 : 2.5) {
+                        ForEach(0..<5, id: \.self) { index in
+                            Capsule()
+                                .frame(
+                                    width: compact ? 1.5 : 2.5,
+                                    height: barHeight(index: index, phase: phase)
+                                )
+                        }
+                    }
                 }
-            }
-            .frame(height: compact ? 10 : 20)
+                .opacity(isAnimating ? 1 : 0.65)
         }
-        .accessibilityLabel(isAnimating ? "Reading aloud" : "Not reading")
-    }
-
-    private var barColor: Color {
-        if compact {
-            return isAnimating ? .white : .white.opacity(0.65)
-        }
-        return isAnimating ? .accentColor : .secondary.opacity(0.65)
+        .accessibilityLabel(isAnimating ? activityLabel : "Not reading")
     }
 
     private func barHeight(index: Int, phase: TimeInterval) -> CGFloat {
